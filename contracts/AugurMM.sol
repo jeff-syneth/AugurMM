@@ -20,6 +20,12 @@ contract ClaimTradingProceeds {
     
 }
 
+contract Orders {
+    function getOrderSharesEscrowed(bytes32 _orderId) public view returns (uint256) {}
+    function getOrderMoneyEscrowed(bytes32 _orderId) public view returns (uint256) {}
+    function getMarket(bytes32 _orderId) public view returns (IMarket) {}
+}
+
 contract owned {
     address public owner;
     
@@ -46,10 +52,13 @@ contract AugurMM is owned {
     uint public totalcontributed;
     uint public joinMin;
     uint public addMin;
-    address[] public listOfTokens;
+    Token[] public listOfTokens;
     CancelOrder public cancelOrderObj;
     ClaimTradingProceeds public claimTradingObj;
+    Orders public ordersObj;
     Member[] public members;
+    uint startTime;
+    uint[] limitUsed;
     
     constructor() public {
         members.push(Member(msg.sender,0));
@@ -57,7 +66,8 @@ contract AugurMM is owned {
         addMin = 0.01 ether;
         cancelOrderObj = CancelOrder(0x3448209268e97652bb67ea12777d4dfba81e3aaf);
         claimTradingObj = ClaimTradingProceeds(0x4334477348222a986fc88a05410aa6b07507872a);
-        
+        ordersObj = Orders(0xd7a14019aeeba25e676a1b596bb19b6f37db74d2);
+        startTime = now;
     }
     
     function setJoinMin(uint newValue) public onlyOwner {
@@ -81,25 +91,48 @@ contract AugurMM is owned {
         totalcontributed += msg.value;
     }
     
-    function withdraw(uint amount, uint addrindex) public {
+    function withdraw(uint amount, uint addrindex) public { //Unqualified withdrawal
         require(members[addrindex].addr == msg.sender);
         require(amount <= members[addrindex].weiamount);
         members[addrindex].weiamount -= amount;
         uint[listOfTokens.length+1] transferAmounts;
-        Token[listOfTokens.length] actualTokens;
         transferAmounts[0] = this.balance * amount / totalcontributed;
         for (uint i=0;i<listOfTokens.length;i++) {
-            actualTokens[i] = Token(listOfTokens[i]);
-            transferAmounts[i+1] = actualTokens[i].balanceOf(this) * amount / totalcontributed;
+            transferAmounts[i+1] = listOfTokens[i].balanceOf(this) * amount / totalcontributed;
         }
         totalcontributed -= amount;
         msg.sender.transfer(transferAmounts[0]);
         for (uint i=0;i<listOfTokens.length;i++) {
-            actualTokens[i].transfer(msg.sender, transferAmounts[i+1]);
+            listOfTokens[i].transfer(msg.sender, transferAmounts[i+1]);
+        }
+    }
+    
+    function withdrawPick(uint amount, uint addrindex, uint[] tokens) external {
+        require(members[addrindex].addr == msg.sender);
+        require(amount <= members[addrindex].weiamount);
+        members[addrindex].weiamount -= amount;
+        uint[tokens.length+1] transferAmounts;
+        Token[tokens.length] actualTokens;
+        transferAmounts[0] = this.balance * amount / totalcontributed;
+        for (uint i=0;i<tokens.length;i++) {
+            actualTokens[i] = listOfTokens[tokens[i]];
+            transferAmounts[i+1] = actualTokens[i].balanceOf(this) * amount / totalcontributed;
+        }
+        totalcontributed -= amount;
+        msg.sender.transfer(transferAmounts[0]);
+        for (uint i=0;i<actualTokens.length;i++) {
+            actualTokens[i].transfer(msg.sender,transferAmounts[i+1]);
         }
     }
     
     function augurCancelOrder(bytes32 id) public onlyOwner {
+        uint cashFreedUp = ordersObj.getOrderMoneyEscrowed(id);
+        uint sharesFreedUp = ordersObj.getOrderSharesEscrowed(id); //shares are assumed to be worth maximal value ie. numTicks attoETH/SHARE
+        uint totalLimitFreed = cashFreedUp + ordersObj.getMarket(id).getNumTicks() * sharesFreedUp;
+        while(limitUsed.length < (now-startTime)/(1 days)+1) {
+            limitUsed.push(0);
+        }
+        limitUsed[(now-startTime)/(1 days)] -= totalLimitFreed;
         cancelOrderObj.cancelOrder(id);
     }
 }
